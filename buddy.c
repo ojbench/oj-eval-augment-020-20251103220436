@@ -5,9 +5,10 @@
 #define PAGE_SIZE 4096
 #define MAX_PAGES (128 * 1024 / 4)
 
-// Free list for each rank
+// Free list for each rank - doubly linked
 typedef struct free_block {
     struct free_block *next;
+    struct free_block *prev;
 } free_block_t;
 
 static free_block_t *free_lists[MAX_RANK + 1];
@@ -81,6 +82,10 @@ int init_page(void *p, int pgcount) {
         // Add this block to free list
         free_block_t *block = (free_block_t *)get_page_addr(current_page);
         block->next = free_lists[rank];
+        block->prev = NULL;
+        if (free_lists[rank] != NULL) {
+            free_lists[rank]->prev = block;
+        }
         free_lists[rank] = block;
 
         // Mark as free in metadata
@@ -125,6 +130,10 @@ void *alloc_pages(int rank) {
         // Add buddy to free list
         free_block_t *buddy = (free_block_t *)get_page_addr(buddy_idx);
         buddy->next = free_lists[current_rank];
+        buddy->prev = NULL;
+        if (free_lists[current_rank] != NULL) {
+            free_lists[current_rank]->prev = buddy;
+        }
         free_lists[current_rank] = buddy;
 
         // Mark buddy as free
@@ -136,6 +145,22 @@ void *alloc_pages(int rank) {
     page_metadata[page_idx].rank = rank;
 
     return (void *)block;
+}
+
+// Helper to remove a specific block from free list - O(1) with doubly-linked list
+static void remove_from_free_list(int page_idx, int rank) {
+    free_block_t *block = (free_block_t *)get_page_addr(page_idx);
+
+    if (block->prev != NULL) {
+        block->prev->next = block->next;
+    } else {
+        // This is the head of the list
+        free_lists[rank] = block->next;
+    }
+
+    if (block->next != NULL) {
+        block->next->prev = block->prev;
+    }
 }
 
 int return_pages(void *p) {
@@ -162,22 +187,8 @@ int return_pages(void *p) {
         if (!page_metadata[buddy_idx].is_free || page_metadata[buddy_idx].rank != rank) break;
 
         // Remove buddy from free list
-        free_block_t **prev_ptr = &free_lists[rank];
-        free_block_t *curr = free_lists[rank];
-        int found = 0;
-
-        while (curr != NULL) {
-            if (get_page_index(curr) == buddy_idx) {
-                *prev_ptr = curr->next;
-                page_metadata[buddy_idx].is_free = 0;
-                found = 1;
-                break;
-            }
-            prev_ptr = &curr->next;
-            curr = curr->next;
-        }
-
-        if (!found) break;
+        remove_from_free_list(buddy_idx, rank);
+        page_metadata[buddy_idx].is_free = 0;
 
         // Merge with buddy
         if (page_idx > buddy_idx) {
@@ -189,6 +200,10 @@ int return_pages(void *p) {
     // Add merged block to free list
     free_block_t *block = (free_block_t *)get_page_addr(page_idx);
     block->next = free_lists[rank];
+    block->prev = NULL;
+    if (free_lists[rank] != NULL) {
+        free_lists[rank]->prev = block;
+    }
     free_lists[rank] = block;
 
     // Mark as free
