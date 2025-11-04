@@ -116,6 +116,9 @@ void *alloc_pages(int rank) {
     // Remove block from free list
     free_block_t *block = free_lists[current_rank];
     free_lists[current_rank] = block->next;
+    if (block->next != NULL) {
+        block->next->prev = NULL;
+    }
 
     int page_idx = get_page_index(block);
     page_metadata[page_idx].is_free = 0;
